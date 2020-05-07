@@ -5,32 +5,47 @@
  * */
 #include "Esp32CtrlLed.h"
 
-Esp32CtrlLed::Esp32CtrlLed(void): LedData(NULL), NUM_LEDS(0), LED_CTRL_PIN(GPIO_NUM_4) {}
+Esp32CtrlLed::Esp32CtrlLed(void) : LedData(NULL), NUM_LEDS(0), LED_CTRL_PIN(GPIO_NUM_4) {}
 
-Esp32CtrlLed::Esp32CtrlLed(uint16_t LedNum, gpio_num_t pin):   LedData(NULL), NUM_LEDS(LedNum), LED_CTRL_PIN(pin) {
+Esp32CtrlLed::Esp32CtrlLed(uint16_t LedNum, gpio_num_t pin) : LedData(NULL), NUM_LEDS(LedNum)
+{
   updateLength(NUM_LEDS);
   setPin(pin);
 }
 
-Esp32CtrlLed::~Esp32CtrlLed() {
+Esp32CtrlLed::~Esp32CtrlLed()
+{
   delete[] LedData;
 }
 
-void Esp32CtrlLed::setPin(gpio_num_t pin){
+/**
+  @brief Set the pin number for the LED display data signal.
+
+  @param pin Target pin for data signal.
+*/
+void Esp32CtrlLed::setPin(gpio_num_t pin)
+{
   LED_CTRL_PIN = pin;
 }
 
-/* Update the size of LedData array                     */
-void Esp32CtrlLed::updateLength(size_t Led_Num) {
-  delete[] LedData;
+/**
+  @brief Change the size of the dynamic LED array. This array holds the
+  color levels to be written by the rmt peripheral.
 
+  @param length New length of the LED array.
+*/
+void Esp32CtrlLed::updateLength(size_t Led_Num)
+{
+  delete[] LedData;
   uint32_t newSize = Led_Num * BITS_PER_LED_CMD;
 
   // Attempt to allocate new data array
-  try {
+  try
+  {
     LedData = new rmt_item32_t[newSize];
   }
-  catch(std::bad_alloc){
+  catch (std::bad_alloc)
+  {
     NUM_LEDS = 0;
     LED_BUFFER_SIZE = 0;
     LedData = NULL;
@@ -41,8 +56,11 @@ void Esp32CtrlLed::updateLength(size_t Led_Num) {
   LED_BUFFER_SIZE = newSize;
 }
 
-/* Setup the hardware peripheral. Only call this once.             */
-void Esp32CtrlLed::ESP32_RMT_Init(void) {
+/**
+    @brief Initialize the RMT peripheral. This function may only be called once.
+*/
+void Esp32CtrlLed::ESP32_RMT_Init(void)
+{
   rmt_config_t config;
   config.rmt_mode = RMT_MODE_TX;
   config.channel = LED_RMT_TX_CHANNEL;
@@ -58,41 +76,88 @@ void Esp32CtrlLed::ESP32_RMT_Init(void) {
   ESP_ERROR_CHECK(rmt_driver_install(config.channel, 0, 0));
 }
 
-/* Update the WS2812 Leds with the new data.                      */
-void Esp32CtrlLed::write_leds() {
-  ESP_ERROR_CHECK(rmt_write_items(LED_RMT_TX_CHANNEL, LedData, LED_BUFFER_SIZE, true));
+/**
+  @brief Write the LED Data in the to the WS2812 display. The RMT peripheral
+  produces the data signal.
+*/
+void Esp32CtrlLed::write_leds()
+{
+  ESP_ERROR_CHECK(rmt_write_items(LED_RMT_TX_CHANNEL, LedData, LED_BUFFER_SIZE, false));
+  ESP_ERROR_CHECK(rmt_wait_tx_done(LED_RMT_TX_CHANNEL, portMAX_DELAY));
 }
 
-/* Clear all Leds                                                */
-void Esp32CtrlLed::resetLeds() {
-  for (uint32_t led = 0; led < NUM_LEDS; led++) {
-    setPixel(led, 0);
+/**
+  @brief Clear the LED display. Writes 0 for each of the RGB LED in a pixel.
+*/
+void Esp32CtrlLed::resetLeds()
+{
+  for (uint32_t led = 0; led < NUM_LEDS; led++)
+  {
+    setPixelRGB(led, 0);
   }
 }
 
-/* Set a pixel with separate R, G, B values.                    */
-void Esp32CtrlLed::setPixel(uint32_t index, uint8_t r, uint8_t g, uint8_t b) {
-  if(index < NUM_LEDS){
-    uint32_t bits_to_send = (r << 16) + (g << 8) + b;
-    for (uint8_t bit = 0; bit < BITS_PER_LED_CMD; bit++) {
-      LedData[index * BITS_PER_LED_CMD + bit] = getNthBit(bits_to_send, 23 - bit) ?
-                                                      (rmt_item32_t){{{T1H, 1, T1L, 0}}} :
-                                                      (rmt_item32_t){{{T0H, 1, T0L, 0}}};
+/**
+  @brief Set the data values for the pixel at the specific index.
+
+  @param index The index of the LED in the LED array.
+  @param r The value for the red LED. ranges from 1 to 255
+  @param g The value for the green LED. ranges from 1 to 255
+  @param b The value for the blue LED. ranges from 1 to 255
+*/
+void Esp32CtrlLed::setPixelRGB(uint32_t index, uint8_t r, uint8_t g, uint8_t b)
+{
+  if (index < NUM_LEDS)
+  {
+    uint32_t bits_to_send = (g << 16) + (r << 8) + b;
+    for (uint8_t bit = 0; bit < BITS_PER_LED_CMD; bit++)
+    {
+      LedData[index * BITS_PER_LED_CMD + bit] = getNthBit(bits_to_send, 23 - bit) ? (rmt_item32_t){{{T1H, 1, T1L, 0}}} : (rmt_item32_t){{{T0H, 1, T0L, 0}}};
     }
   }
 }
 
-/* Set a pixel from a 32 bit color value                        */
-void Esp32CtrlLed::setPixel(uint32_t index, uint32_t colorData) {
-  if( index < NUM_LEDS ){
-    for (uint8_t bit = 0; bit < BITS_PER_LED_CMD; bit++) {
-      LedData[index * BITS_PER_LED_CMD + bit] = getNthBit(colorData, 23 - bit) ?
-                                                      (rmt_item32_t){{{T1H, 1, T1L, 0}}} :
-                                                      (rmt_item32_t){{{T0H, 1, T0L, 0}}};
+/**
+  @brief Set the data values for the pixel at the specific index.
+
+  @param index The index of the LED in the LED array.
+  @param colorData The color for the specific pixel. Must formatted as 0x00RRGGBB
+*/
+void Esp32CtrlLed::setPixelRGB(uint32_t index, uint32_t colorData)
+{
+  if (index < NUM_LEDS)
+  {
+    uint32_t bits_to_send = (((colorData >> 8) & 0xFF) << 16) + (((colorData >> 16) & 0xFF) << 8) + (colorData & 0xFF);
+    for (uint8_t bit = 0; bit < BITS_PER_LED_CMD; bit++)
+    {
+      LedData[index * BITS_PER_LED_CMD + bit] = getNthBit(bits_to_send, 23 - bit) ? (rmt_item32_t){{{T1H, 1, T1L, 0}}} : (rmt_item32_t){{{T0H, 1, T0L, 0}}};
     }
   }
 }
 
-uint8_t Esp32CtrlLed::getNthBit(uint32_t number, uint8_t bit){
+/**
+  @brief Copy the LED pixel value of oldIndex into the new index.
+  This is useful for shifting frames on the display.
+
+  @param oldIndex Index of value to be copied.
+  @param newIndex Location of the copied value.
+*/
+void Esp32CtrlLed::copyIndex(uint32_t oldIndex, uint32_t newIndex)
+{
+  for (uint8_t bit = 0; bit < BITS_PER_LED_CMD; bit++)
+  {
+    LedData[newIndex * BITS_PER_LED_CMD + bit] = LedData[oldIndex * BITS_PER_LED_CMD + bit];
+  }
+}
+
+/**
+    @brief Gets the input bit of the number, and returns it as a base ten unsigned int.
+
+    @param number Input value.
+    @param bit Target bit to be retrieved.
+    @return Bit converted to base 10 value.
+*/
+uint8_t Esp32CtrlLed::getNthBit(uint32_t number, uint8_t bit)
+{
   return (number >> bit) & 1;
 }
